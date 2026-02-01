@@ -95,6 +95,9 @@ gem "omniauth-saml", "~> 2.1"
 gem "aasm"
 gem "after_commit_everywhere", "~> 1.0"
 
+# Category hierarchy
+gem "ancestry", "~> 4.3"
+
 # Feature flags
 gem "flipper"
 gem "flipper-active_record"
