@@ -107,13 +107,14 @@ class Transaction::Search
       include_uncategorized = categories.include?(uncategorized_name)
       real_categories = categories - [ uncategorized_name ]
 
-      # Get parent category IDs for the given category names
-      parent_category_ids = family.categories.where(name: real_categories).pluck(:id)
+      # Get IDs for matching categories and all their descendants using ancestry
+      matching_categories = family.categories.where(name: real_categories)
+      category_ids = matching_categories.flat_map(&:subtree_ids).uniq
 
       uncategorized_condition = "(categories.id IS NULL AND transactions.kind NOT IN ('funds_movement', 'cc_payment'))"
 
-      # Build condition based on whether parent_category_ids is empty
-      if parent_category_ids.empty?
+      # Build condition based on whether category_ids is empty
+      if category_ids.empty?
         if include_uncategorized
           query = query.left_joins(:category).where(
             "categories.name IN (?) OR #{uncategorized_condition}",
@@ -125,13 +126,13 @@ class Transaction::Search
       else
         if include_uncategorized
           query = query.left_joins(:category).where(
-            "categories.name IN (?) OR categories.parent_id IN (?) OR #{uncategorized_condition}",
-            real_categories, parent_category_ids
+            "categories.id IN (?) OR #{uncategorized_condition}",
+            category_ids
           )
         else
           query = query.left_joins(:category).where(
-            "categories.name IN (?) OR categories.parent_id IN (?)",
-            real_categories, parent_category_ids
+            "categories.id IN (?)",
+            category_ids
           )
         end
       end
