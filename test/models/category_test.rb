@@ -21,13 +21,20 @@ class CategoryTest < ActiveSupport::TestCase
     assert_nil transactions.map { |t| t.reload.category }.uniq.first
   end
 
-  test "subcategory can only be one level deep" do
-    category = categories(:subcategory)
+  test "allows unlimited nesting depth" do
+    # Verify 4-level deep hierarchy works (was previously limited to 2 levels)
+    assert_equal 0, categories(:level_1).depth
+    assert_nil categories(:level_1).parent
 
-    error = assert_raises(ActiveRecord::RecordInvalid) do
-      category.subcategories.create!(name: "Invalid category", family: @family)
-    end
+    assert_equal 1, categories(:level_2).depth
+    assert_equal categories(:level_1), categories(:level_2).parent
 
-    assert_equal "Validation failed: Parent can't have more than 2 levels of subcategories", error.message
+    assert_equal 2, categories(:level_3).depth
+    assert_equal categories(:level_2), categories(:level_3).parent
+    assert_equal categories(:level_1), categories(:level_3).root
+
+    assert_equal 3, categories(:level_4).depth
+    assert_equal categories(:level_3), categories(:level_4).parent
+    assert_equal categories(:level_1), categories(:level_4).root
   end
 end
