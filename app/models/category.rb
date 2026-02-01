@@ -1,4 +1,14 @@
 class Category < ApplicationRecord
+  # UUID v4 format without anchors for ancestry gem's composite pattern matching
+  # Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (32 hex digits with hyphens)
+  UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+
+  # Add ancestry support for unlimited nesting with UUID primary keys
+  # Note: No anchors (\A, \z) - ancestry gem adds its own anchors when building the full validation pattern
+  # The ancestry gem provides virtual parent_id/parent methods calculated from ancestry column
+  has_ancestry orphan_strategy: :restrict,
+               primary_key_format: UUID_PATTERN
+
   has_many :transactions, dependent: :nullify, class_name: "Transaction"
   has_many :import_mappings, as: :mappable, dependent: :destroy, class_name: "Import::Mapping"
 
@@ -11,8 +21,12 @@ class Category < ApplicationRecord
   validates :name, :color, :lucide_icon, :family, presence: true
   validates :name, uniqueness: { scope: :family_id }
 
-  validate :category_level_limit
+  validate :prevent_circular_ancestry
   validate :nested_category_matches_parent_classification
+
+  # Keep parent_id column in sync with ancestry for SQL queries
+  # Ancestry gem provides virtual parent_id from ancestry column, but SQL needs physical column
+  before_save :sync_parent_id_from_ancestry
 
   before_save :inherit_color_from_parent
 
@@ -26,6 +40,8 @@ class Category < ApplicationRecord
   scope :roots, -> { where(parent_id: nil) }
   scope :incomes, -> { where(classification: "income") }
   scope :expenses, -> { where(classification: "expense") }
+  scope :leaves, -> { where.not(id: select(:parent_id).distinct) }
+  scope :with_depth, ->(depth) { where(ancestry_depth: depth) }
 
   COLORS = %w[#e99537 #4da568 #6471eb #db5a54 #df4e92 #c44fe9 #eb5429 #61c9ea #805dee #6ad28a]
 
@@ -46,14 +62,23 @@ class Category < ApplicationRecord
     delegate :name, :color, to: :category
 
     def self.for(categories)
-      categories.select { |category| category.parent_id.nil? }.map do |category|
-        new(category, category.subcategories)
-      end
+      # Get root categories (depth 0)
+      roots = categories.select { |c| c.ancestry_depth == 0 }
+
+      roots.map do |root|
+        # Get all descendants, not just immediate children
+        descendants = categories.select { |c| c.ancestor_ids.include?(root.id) }
+        new(root, descendants.sort_by { |c| [ c.ancestry_depth, c.name ] })
+      end.sort_by { |group| group.category.name }
     end
 
     def initialize(category, subcategories = nil)
       @category = category
       @subcategories = subcategories || []
+    end
+
+    def subcategories_by_parent(parent_id)
+      @subcategories.select { |sc| sc.parent_id == parent_id }
     end
   end
 
@@ -156,7 +181,27 @@ class Category < ApplicationRecord
 
   def replace_and_destroy!(replacement)
     transaction do
+      # Update all transactions to use replacement category
       transactions.update_all category_id: replacement&.id
+
+      # Move subcategories to replacement (or make them root if nil)
+      # This prevents ancestry orphan_strategy: :restrict from blocking deletion
+      # Use update_all for efficiency, manually update ancestry and parent_id
+      if replacement
+        children.update_all(
+          ancestry: replacement.child_ancestry,
+          ancestry_depth: replacement.depth + 1,
+          parent_id: replacement.id
+        )
+      else
+        # Make children root level
+        children.update_all(
+          ancestry: nil,
+          ancestry_depth: 0,
+          parent_id: nil
+        )
+      end
+
       destroy!
     end
   end
@@ -171,6 +216,22 @@ class Category < ApplicationRecord
 
   def name_with_parent
     subcategory? ? "#{parent.name} > #{name}" : name
+  end
+
+  def hierarchy_path
+    path.map(&:name).join(" > ")
+  end
+
+  def leaf?
+    !has_children?
+  end
+
+  def all_descendants
+    descendants # ancestry gem method
+  end
+
+  def root_ancestor
+    root # ancestry gem method
   end
 
   # Predicate: is this the synthetic "Uncategorized" category?
@@ -189,9 +250,16 @@ class Category < ApplicationRecord
   end
 
   private
-    def category_level_limit
-      if (subcategory? && parent.subcategory?) || (parent? && subcategory?)
-        errors.add(:parent, "can't have more than 2 levels of subcategories")
+    def prevent_circular_ancestry
+      return unless parent_id_changed? && parent_id.present?
+
+      # We can only check for cycles if this record has an ID (UUIDs are typically assigned before save)
+      return if id.nil?
+
+      # Use ancestry's ancestor traversal to detect cycles: the new parent cannot be self
+      # and cannot have this category as one of its ancestors.
+      if parent && (parent.id == id || parent.ancestor_ids.include?(id))
+        errors.add(:parent, "cannot be a descendant of this category")
       end
     end
 
@@ -199,6 +267,13 @@ class Category < ApplicationRecord
       if subcategory? && parent.classification != classification
         errors.add(:parent, "must have the same classification as its parent")
       end
+    end
+
+    # Sync the physical parent_id column with ancestry's virtual parent_id
+    # This allows SQL queries to use c.parent_id without knowing ancestry's internal format
+    def sync_parent_id_from_ancestry
+      # Use write_attribute to avoid triggering ancestry's parent_id= setter
+      write_attribute(:parent_id, parent_id)
     end
 
     def monetizable_currency
