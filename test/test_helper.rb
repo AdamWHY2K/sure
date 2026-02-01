@@ -61,6 +61,31 @@ module ActiveSupport
     # Setup all fixtures in test/fixtures/*.yml for all tests in alphabetical order.
     fixtures :all
 
+    # Rebuild ancestry from parent_ids after fixtures load
+    # In parallel mode: runs once per worker via parallelize_setup
+    # In single-process mode: runs via setup_fixtures override
+    parallelize_setup do |worker|
+      rebuild_category_ancestry
+    end
+
+    def self.rebuild_category_ancestry
+      return unless defined?(Category) && Category.table_exists?
+      Category.build_ancestry_from_parent_ids!
+      # Sync physical parent_id column from ancestry
+      Category.find_each { |c| c.update_column(:parent_id, c.parent_id) }
+    rescue ActiveRecord::StatementInvalid
+      # Ignore if table doesn't exist yet
+    end
+
+    def setup_fixtures(*args)
+      super
+      # Only rebuild in single-process mode (parallel mode uses parallelize_setup)
+      workers = self.class.respond_to?(:parallelize_workers) ? self.class.parallelize_workers : nil
+      if !workers || workers <= 1
+        self.class.rebuild_category_ancestry
+      end
+    end
+
     # Add more helper methods to be used by all tests here...
     def sign_in(user)
       post sessions_path, params: { email: user.email, password: user_password_test }
