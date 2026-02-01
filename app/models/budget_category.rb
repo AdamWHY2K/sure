@@ -210,8 +210,8 @@ class BudgetCategory < ApplicationRecord
   def subcategories
     return BudgetCategory.none unless category.parent_id.nil?
 
-    budget.budget_categories
-      .joins(:category)
-      .where(categories: { parent_id: category.id })
+    # Use ancestry to find children instead of parent_id join
+    child_category_ids = category.child_ids
+    budget.budget_categories.where(category_id: child_category_ids)
   end
 end
