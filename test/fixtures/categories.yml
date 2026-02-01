@@ -15,3 +15,34 @@ subcategory:
   name: Restaurants
   parent: food_and_drink
   family: dylan_family
+
+level_1:
+  name: Level 1
+  classification: expense
+  color: "#000000"
+  lucide_icon: circle
+  family: dylan_family
+
+level_2:
+  name: Level 2
+  classification: expense
+  color: "#000000"
+  lucide_icon: circle
+  parent: level_1
+  family: dylan_family
+
+level_3:
+  name: Level 3
+  classification: expense
+  color: "#000000"
+  lucide_icon: circle
+  parent: level_2
+  family: dylan_family
+
+level_4:
+  name: Level 4
+  classification: expense
+  color: "#000000"
+  lucide_icon: circle
+  parent: level_3
+  family: dylan_family
